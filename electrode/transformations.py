@@ -1130,7 +1130,9 @@ def euler_from_matrix(matrix, axes='sxyz'):
     """
     try:
         firstaxis, parity, repetition, frame = _AXES2TUPLE[axes.lower()]
+        # print("try")    # wwc
     except (AttributeError, KeyError):
+        # print("except")     # wwc
         _TUPLE2AXES[axes]  # validation
         firstaxis, parity, repetition, frame = axes
 

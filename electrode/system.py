@@ -27,19 +27,19 @@ import logging
 import numpy as np
 from scipy import optimize, constants as ct
 
-if not hasattr(optimize, "minimize"):
-    # quick work around for scipy<0.11
+if not hasattr(optimize, "minimize"):  # Check if scipy.optimize has attribute "minimize"
+    # quick work around for scipy<0.11  # Perhaps this is an alternative method for old version scipy. wwc
     class _Result(object):
         pass
     def minimize(fun, x0, jac=None, hess=None, *args, **kwargs):
         method = kwargs.pop("method", "Newton-CG")
         assert method == "Newton-CG"
-        r = optimize.fmin_ncg(f=fun, x0=x0, fprime=jac,
+        r = optimize.fmin_ncg(f=fun, x0=x0, fprime=jac,    # see scipy.optimize.fmin_ncg()  wwc
                 fhess=hess, full_output=True, *args, **kwargs)
         res = _Result()
         res.x, res.success, res.message = r[0], r[5] == 0, "unknown"
         return res
-    optimize.minimize = minimize
+    optimize.minimize = minimize    # change name.  wwc
 
 try:
     import cvxopt, cvxopt.modeling
@@ -77,7 +77,7 @@ class System(list):
     def __init__(self, electrodes=[], **kwargs):
         super(System, self).__init__(**kwargs)
         self.extend(electrodes)
-   
+    
     @property
     def names(self):
         """List of names of the electrodes.
@@ -125,7 +125,8 @@ class System(list):
         Electrode
             The electrode given by its index or name.
             None if not found by name.
-            
+            # E.g. for instance s, s[0] or s["DC1"] both refer to the "GridElectrode" instance of DC1. wwc
+
         Raises
         ------
         IndexError
@@ -180,6 +181,8 @@ class System(list):
 
     def electrical_potential(self, x, typ="dc", derivative=0, expand=False):
         """Electrical potential derivative.
+        # Not only for "dc", but also used in pseudo_potential when typ="rf"  wwc
+        # Because it calls GridElectrode.potential(), the pot return from this method is scaled with amplitude.  wwc
 
         Parameters
         ----------
@@ -210,13 +213,19 @@ class System(list):
         """
         x = np.asanyarray(x, dtype=np.double).reshape(-1, 3)
         pot = np.zeros((x.shape[0], 2*derivative+1), np.double)
-        for ei in self:
+        for ei in self:  # self (System class, inherited from list) instance contains multiple GridElectrode (ei) instance.  wwc
+            # getattr check if typ is an attribute of ei (GridElectrode instance), if it is, return the value of ei.typ  wwc
+            # Typically, ei.typ is ei.dc or ei.rf, which are the scaling factor of each electrode potential.  wwc
             vi = getattr(ei, typ, None)
-            if vi:
-                ei.potential(x, derivative, potential=vi, out=pot)
-        if expand:
+            if vi:  # If set a ei.vi (ei.dc/ei.rf) = 0, you won't go into this if.  wwc
+                # ei can be any "electrode" classes in electrode.py, but we only use GridElectrode, # wwc
+                # so ei.potential refers to line ~595 in electrode.py.  wwc
+                ei.potential(x, derivative, potential=vi, out=pot)    # "potential" is the argument for ei.potential to scale.  wwc  Tried 100.
+                # print(ei.name,"value:", vi)    # wwc
+                # All dc potentials have been summed in the last for loop of ei.potential--out--pot  wwc
+        if expand:    # "expand" decides if we will reshape potential array. In self.pseudo and self.potential, all True.  wwc
             pot = expand_tensor(pot)
-        return pot
+        return pot    # pot now is summation of all dc.  wwc
     
     def individual_potential(self, x, derivative=0):
         """Individual contributions to the electrical potential.
@@ -289,15 +298,18 @@ class System(list):
             Pseudopotential derivative. Fully expanded since this is not
             generally harmonic.
         """
+        # See blakestad2010, Eq.(5.2). Try to expand phi_rf in powers of x, then nabla phi_rf and square, # wwc
+        # you'll find the term harmonic phi_pseudo propotional to x^2, depends on multiple terms of phi_rf expansion.  wwc
+
         p = [self.electrical_potential(x, "rf", i, expand=True)
                 for i in range(1, derivative+2)]
         if derivative == 0:
-            return np.einsum("ij,ij->i", p[0], p[0])
+            return np.einsum("ij,ij->i", p[0], p[0])  # Einstein summation  wwc
         elif derivative == 1:
             return 2*np.einsum("ij,ijk->ik", p[0], p[1])
-        elif derivative == 2:
-            return 2*(np.einsum("ijk,ijl->ikl", p[1], p[1])
-                     +np.einsum("ij,ijkl->ikl", p[0], p[2]))
+        elif derivative == 2:    # 2nd should be a harmonic pseudo potential. Two parts.  wwc
+            return 2*(np.einsum("ijk,ijl->ikl", p[1], p[1])  # a2^2  wwc
+                     +np.einsum("ij,ijkl->ikl", p[0], p[2]))  # a1*a3  wwc
         elif derivative == 3:
             a = np.einsum("ij,ijklm->iklm", p[0], p[3])
             b = np.einsum("ijk,ijlm->iklm", p[1], p[2])
@@ -340,7 +352,7 @@ class System(list):
         dc = self.electrical_potential(x, "dc", derivative,
                 expand=True)
         rf = self.pseudo_potential(x, derivative)
-        return dc + rf
+        return dc + rf    # summation of rf with all dc.  wwc
 
     def plot(self, ax, alpha=.3, **kwargs):
         """Plot electrodes projected onto the xy plane.
@@ -392,6 +404,7 @@ class System(list):
     def minimum(self, x0, axis=(0, 1, 2), coord=np.identity(3),
         method="Newton-CG", **kwargs):
         """Find a potential minimum.
+        # Within System.potential(), Robert has combined dc and rf. But I don't find scaling factor?  wwc
         
         Parameters
         ----------
@@ -411,16 +424,16 @@ class System(list):
         --------
         scipy.optimize.minimize
         """
-        x = np.array(x0)
+        x = np.array(x0,dtype=np.double)    # add dtype=np.double to avoid precision loss bug.  wwc
         axis = list(axis)
-        def f(xi):
+        def f(xi):    # potential
             x[axis] = xi
-            return self.potential(np.dot(coord, x), 0)[0]
-        def g(xi):
+            return self.potential(np.dot(coord, x), 0)[0]  # THe second 0 is derivative.  wwc
+        def g(xi):    # gradient
             x[axis] = xi
             return rotate_tensor(self.potential(np.dot(coord, x), 1),
                     coord)[0, axis]
-        def h(xi):
+        def h(xi):    # hessian
             x[axis] = xi
             return rotate_tensor(self.potential(np.dot(coord, x), 2),
                     coord)[0, axis][:, axis]
@@ -428,7 +441,7 @@ class System(list):
         #        disp=False)
         x0 = np.array(x0)[axis]
         res = optimize.minimize(fun=f, x0=x0, jac=g, hess=h,
-            method=method, **kwargs)
+            method=method, **kwargs)    # Error messages printed out should all from minimize() itself.  wwc
         if not res.success:
             raise ValueError("failed, %i, %s, %s" % (res.success,
                 res.message, res))
@@ -475,7 +488,7 @@ class System(list):
         if not ret in ("ftol", "xtol"):
             raise ValueError("%s", ((x0, axis, x, xs, p, ret),))
         # f(xs) # update x
-        return x, p
+        return x, p    # x: saddle point, p: saddle potential  wwc
 
     def modes(self, x, sorted=True):
         """Curvatures and eigenmode vectors.
@@ -829,7 +842,8 @@ class System(list):
         generator
             Yields strings that can be printed or written to a file.
         """
-        it = self._analyze_static(x, axis, m, q, l, o, ions)
+        # I guess Robert wraps analyse_static in case that to add new functions in future. wwc
+        it = self._analyze_static(x, axis, m, q, l, o, ions) 
         if log is None:
             return it
         else:
@@ -837,9 +851,9 @@ class System(list):
                 logger.log(log, line)
 
     def rf_scale(self, m, q, l, o):
-        return np.sqrt(q/m)/(2*l*o)
+        return np.sqrt(q/m)/(2*l*o)    # This is the square root of pesudo potential coefficient (except amplitude Vrf).  wwc
 
-    def _analyze_static(self, x, axis=(0, 1, 2),
+    def _analyze_static(self, x, axis=(0, 1, 2),  # x is minimum
                         m=ct.atomic_mass, q=ct.elementary_charge,
                         l=100e-6, o=2*np.pi*1e6, ions=1):
         # rf pseudopotential voltage scale
@@ -849,34 +863,39 @@ class System(list):
                " l=%.3g µm, scale=%.3g V'/V_SI"
                ) % (o/(2e6*np.pi), m/ct.atomic_mass,
                     q/ct.elementary_charge, l/1e-6, rf_scale)
-        yield "corrdinates:"
-        yield " analyze point: %s" % (x,)
+        yield "coordinates:"
+        yield " analyze point: %s" % (x,)    # x is 
         yield "               (%s µm)" % (x*l/1e-6,)
+        # Based on the minimum found in advance in jupyter, there's another minimum.  wwc
         trap = self.minimum(x)
         yield " minimum is at offset: %s" % (trap - x,)
         yield "                      (%s µm)" % ((trap - x)*l/1e-6,)
+        # x is minimum point (just one point), so electrical_potential(x, "dc", 0) is like [[value]].  wwc
         p_dc = self.electrical_potential(x, "dc", 0)[0]
         p_rf = self.pseudo_potential(x, 0)[0]
         yield "potential:"
-        yield " dc electrical: %.2g eV" % p_dc
-        yield " rf pseudo: %.2g eV" % p_rf
+        yield " dc electrical: %.3g eV" % p_dc    # All dc potential at minimum x0.  wwc  %.2g previously
+        yield " rf pseudo: %.3g eV" % p_rf
         try:
-            xs, xsp = self.saddle(x + 1e-2*x[2])
+            xs, xsp = self.saddle(x + 0.5*x[2])    # set a small initail shift (1e-2*x[2]) to search a saddle, usually it's on x axis.  wwc
             yield " saddle offset: %s" % (xs - x,)
             yield "               (%s µm)" % ((xs - x)*l/1e-6,)
-            yield " saddle height: %.2g eV" % (xsp - (p_dc + p_rf))
+            yield " saddle height: %.3g eV" % (xsp - (p_dc + p_rf))    # (p_dc + p_rf) is the potential at x (minimum) point.  wwc
         except:
             yield " saddle not found"
         yield "force:"
         f_dc = self.electrical_potential(x, "dc", 1)[0]
         f_rf = self.pseudo_potential(x, 1)[0]
+        f_tot = f_dc + f_rf     # If it's minimum, should be 0. wwc
         yield " dc electrical: %s eV/l" % (f_dc,)
         yield "               (%s eV/m)" % (f_dc/l,)
         yield " rf pseudo: %s eV/l" % (f_rf,)
         yield "           (%s eV/m)" % (f_rf/l,)
+        yield " total: %s eV/l" % (f_tot,)      # wwc
+        yield "           (%s eV/m)" % (f_tot/l,)    # wwc
         yield "modes:"
-        curves, modes_pp = self.modes(x)
-        freqs_pp = np.sqrt(q*curves/m)/(2*np.pi*l)
+        curves, modes_pp = self.modes(x)    # curves are the eigenvalues of potential Hessian matrix.  wwc
+        freqs_pp = np.sqrt(q*curves/m)/(2*np.pi*l)    # secular frequencies.  wwc
         mu, b = self.mathieu(x, scale=rf_scale, r=4, sorted=True)
         freqs = mu[:3].imag*o/(2*np.pi)
         modes = b[len(b)//2 - 3:len(b)//2, :3].real

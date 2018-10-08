@@ -36,7 +36,7 @@ except ImportError:
 
 
 
-class Electrode(object):
+class Electrode(object):    # parent class for all other *ELectrode class  wwc
     """An electrode of a Paul trap.
 
     Encapsulates the name, the dc and rf voltages and the electrical
@@ -56,9 +56,9 @@ class Electrode(object):
     """
     __slots__ = "name dc rf".split()
 
-    def __init__(self, name="", dc=0., rf=0.):
+    def __init__(self, name="", dc=0., rf=0.):  # The default 0 dc and rf value  wwc
         self.name = name
-        self.dc = dc
+        self.dc = dc    # wwc
         self.rf = rf
 
     def potential(self, x, derivative=0, potential=1., out=None):
@@ -106,6 +106,7 @@ class Electrode(object):
             Find partial derivates that can be used to construct others
             using the vanishing trace of the Laplacian of.
         """
+        print("This is an empty parent class for other *Electrode.")  # wwc
         raise NotImplementedError
 
     def orientations(self):
@@ -406,12 +407,16 @@ class GridElectrode(Electrode):
     """
     __slots__ = "data origin spacing".split()
 
+
+    # Except following 3 attributes, .dc and .rf attributes are inherited from parent Electrode class. See line 61 62.  wwc
     def __init__(self, data=[], origin=(0, 0, 0), spacing=(1, 1, 1),
             **kwargs):
         super(GridElectrode, self).__init__(**kwargs)
         self.data = [np.asanyarray(i, np.double) for i in data]
         self.origin = np.asanyarray(origin, np.double)
         self.spacing = np.asanyarray(spacing, np.double)
+        # self.dc  wwc
+        # self.rf  wwc
 
     @classmethod
     def from_result(cls, result, maxderiv=4):
@@ -430,10 +435,11 @@ class GridElectrode(Electrode):
         """
         origin = result.grid.get_origin()
         spacing = result.grid.step
-        data = [result.potential[:, :, :, None]]
-        if result.field is not None:
+        data = [result.potential[:, :, :, None]]    # None is np.newaxis   wwc
+        if result.field is not None:    # From bem it's None, so it won't enter here. wwc
             data.append(result.field.transpose(1, 2, 3, 0))
         obj = cls(origin=origin, spacing=spacing, data=data)
+        # print(obj.data)    # Untill here, obj.data is only result.potential which is added newaxis.    wwc
         obj.generate(maxderiv)
         return obj
 
@@ -457,27 +463,91 @@ class GridElectrode(Electrode):
         """
         from tvtk.api import tvtk
         #sgr = tvtk.XMLImageDataReader(file_name=fil)
-        sgr = tvtk.StructuredPointsReader(file_name=fil)
+        # I guess vtk file has stored the name of different arrays. So here we also input the name. wwc
+        sgr = tvtk.StructuredPointsReader(file_name=fil) 
         sgr.update()
-        sg = sgr.output
-        pot = [None, None]
+        # print(sgr) # wwc
+        sg = sgr.get_output()  # At first it's sg = sgr.output    wwc
+        # print(sg) # wwc
+        # pot = [None, None]    Robert's original pot version    wwc
+        pot = []    # wwc
+        # number_of_array for "DC": 1, "RF": 3.    wwc
+        # print("Length",sg.point_data.number_of_arrays)  # wwc
         for i in range(sg.point_data.number_of_arrays):
+            # For "DC", the only array has name "potential".   wwc
+            # For RF, 3 array are "potential", "field", "pseudo_potential". That's why number_of_arrays of RF is 3.    wwc
             name = sg.point_data.get_array_name(i)
             if "_pondpot" in name:
                 continue # not harmonic, do not use it
+            # But we don't need "pseudo_potential", so this "elif" is to get rid of it,    wwc
+            # and meanwhile keep "field" for RF. DC only has "potential".    wwc
             elif name not in ("potential", "field"):
                 continue
-            sp = sg.point_data.get_array(i)
+            sp = sg.point_data.get_array(i)    # Extract each array.    wwc
             data = sp.to_array()
-            spacing = sg.spacing
+            spacing = sg.spacing    # Those info are stored before in bem with data.    wwc
             origin = sg.origin
             dimensions = tuple(sg.dimensions)
-            dim = sp.number_of_components
+            dim = sp.number_of_components    # Potential: dim=1. Field: dim=3    wwc
             data = data.reshape(dimensions[::-1]+(dim,)).transpose(2, 1, 0, 3)
-            pot[int((dim-1)/2)] = data
+            # Here data is already the shape we need, as data processed by "from_result()".    wwc
+            # print("data",data,type(data))    #  ndarray type.    wwc
+            # pot[int((dim-1)/2)] = data    # Robert's original pot version. int((dim-1)/2) = 0.    wwc
+            pot.append(data)    # The first dimension of self.data is a list, elements are different derivatives. ?  wwc
+        # print(pot)    # wwc
         obj = cls(origin=origin, spacing=spacing, data=pot)
-        obj.generate(maxderiv)
+        obj.generate(maxderiv)    # to 3rd order. Only accept proper obj.data format.    wwc
         return obj
+
+
+    # @classmethod    # Just a copy by wwc
+    # def from_vtk1(cls, fil, maxderiv=4):
+    #     """Load grid potential data from vtk StructuredPoints.
+
+    #     .. note:: needs `tvtk`
+
+    #     Parameters
+    #     ----------
+    #     fil : str
+    #         File name of the VTK StructuredPoints file containing the
+    #         gridded data.
+    #     maxderiv : int
+    #         Maximum derivative order to precompute.
+
+    #     Returns
+    #     -------
+    #     GridElectrode
+    #     """
+    #     from tvtk.api import tvtk
+    #     #sgr = tvtk.XMLImageDataReader(file_name=fil)
+    #     sgr = tvtk.StructuredPointsReader(file_name=fil)
+    #     sgr.update()
+    #     # print(sgr) # wwc
+    #     sg = sgr.get_output()  # At first it's sg = sgr.output    wwc
+    #     # print(sg) # wwc
+    #     pot = [None, None]
+    #     print("Here",sg.point_data.number_of_arrays)    # number_of_array for "DC": 1, "RF": 3.    wwc
+    #     for i in range(sg.point_data.number_of_arrays):
+    #         name = sg.point_data.get_array_name(i)    # For "DC", name is usually "Potential"  wwc
+    #         if "_pondpot" in name:
+    #             continue # not harmonic, do not use it
+    #         elif name not in ("potential", "field"):
+    #             continue
+    #         sp = sg.point_data.get_array(i)
+    #         data = sp.to_array()
+    #         spacing = sg.spacing
+    #         origin = sg.origin
+    #         dimensions = tuple(sg.dimensions)
+    #         dim = sp.number_of_components    # Potential: dim=1. Field: dim=3    wwc
+    #         data = data.reshape(dimensions[::-1]+(dim,)).transpose(2, 1, 0, 3)
+    #         # print("data",data,type(data))  # Here data is already the shape we need. ndarray type.    wwc
+    #         pot[int((dim-1)/2)] = data
+    #     print("Here")    # wwc
+    #     print(pot)    # wwc
+    #     obj = cls(origin=origin, spacing=spacing, data=pot)
+    #     obj.generate(maxderiv)
+    #     return obj
+
 
     def generate(self, maxderiv=4):
         """Generate missing derivative orders by successive finite
@@ -494,9 +564,9 @@ class GridElectrode(Electrode):
         """
         for deriv in range(maxderiv):
             if len(self.data) < deriv+1:
-                self.data.append(self.derive(deriv))
+                self.data.append(self.derive(deriv))    # Will store the generated high order derivatives to self.data.  wwc
             ddata = self.data[deriv]
-            assert ddata.ndim == 4, ddata.ndim
+            assert ddata.ndim == 4, ddata.ndim    # I guess it test if 4th order is reached?  wwc
             assert ddata.shape[-1] == 2*deriv+1, ddata.shape
             if deriv > 0:
                 assert ddata.shape[:-1] == self.data[deriv-1].shape[:-1]
@@ -518,16 +588,19 @@ class GridElectrode(Electrode):
         for i in range(2*deriv+1):
             (e, j), k = construct_derivative(deriv, i)
             # TODO triple work
-            grad = np.gradient(odata[..., j], *self.spacing)[k]
+            grad = np.gradient(odata[..., j], *self.spacing)[k]    # "gradient", V(x)=V(x0)+V'(x0)(x-x0)+V''(x0)/2(x-x0)^2+...  wwc
             ddata[..., i] = grad
         return ddata
 
-    def potential(self, x, derivative=0, potential=1., out=None):
-        x = (x - self.origin[None, :])/self.spacing[None, :]
-        if out is None:
+    def potential(self, x, derivative=0, potential=1., out=None):  # potential arg is the scaling factor.  wwc
+        # Shift the grid points.  wwc
+        x = (x - self.origin[None, :])/self.spacing[None, :]    
+        if out is None:  # In System.electrical_potent ial, out=pot to receive data.  wwc
             out = np.zeros((x.shape[0], 2*derivative+1), np.double)
         dat = self.data[derivative]
+        # Summation of all dc potentials, +=  wwc
         for i in range(2*derivative+1):
-            out[:, i] += potential*map_coordinates(dat[..., i], x.T,
-                    order=1, mode="nearest")
+            # print("scaling", potential)    # wwc
+            out[:, i] += potential*map_coordinates(dat[..., i], x.T,  # scaling of electrode potential values here!  wwc
+                    order=1, mode="nearest")    # ? Round arbitrary x coordinates to the grid points. May use interpolation in the future.  wwc
         return out
