@@ -455,12 +455,16 @@ class GridElectrode(Electrode):
         -------
         GridElectrode
         """
+        from os.path import isfile
+        if not (isfile(fil) and fil.endswith('.vtk')):  # wwc
+            raise FileNotFoundError("No vtk file is found, check your path.")
         from tvtk.api import tvtk
         #sgr = tvtk.XMLImageDataReader(file_name=fil)
         sgr = tvtk.StructuredPointsReader(file_name=fil)
         sgr.update()
-        sg = sgr.output
-        pot = [None, None]
+        sg = sgr.get_output()
+        # pot = [None, None]    Robert's original pot version    wwc
+        pot = []    # wwc
         for i in range(sg.point_data.number_of_arrays):
             name = sg.point_data.get_array_name(i)
             if "_pondpot" in name:
@@ -474,7 +478,8 @@ class GridElectrode(Electrode):
             dimensions = tuple(sg.dimensions)
             dim = sp.number_of_components
             data = data.reshape(dimensions[::-1]+(dim,)).transpose(2, 1, 0, 3)
-            pot[int((dim-1)/2)] = data
+            # pot[int((dim-1)/2)] = data    # Robert's original pot version. int((dim-1)/2) = 0.    wwc
+            pot.append(data)
         obj = cls(origin=origin, spacing=spacing, data=pot)
         obj.generate(maxderiv)
         return obj
