@@ -58,7 +58,7 @@ class Electrode(object):    # parent class for all other *ELectrode class  wwc
 
     def __init__(self, name="", dc=0., rf=0.):  # The default 0 dc and rf value  wwc
         self.name = name
-        self.dc = dc    # wwc
+        self.dc = dc
         self.rf = rf
 
     def potential(self, x, derivative=0, potential=1., out=None):

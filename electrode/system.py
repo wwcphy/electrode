@@ -298,16 +298,16 @@ class System(list):
             Pseudopotential derivative. Fully expanded since this is not
             generally harmonic.
         """
-        # See blakestad2010, Eq.(5.2). Try to expand phi_rf in powers of x, then nabla phi_rf and square, # wwc
-        # you'll find the term harmonic phi_pseudo propotional to x^2, depends on multiple terms of phi_rf expansion.  wwc
-
+        # RObert calculates derivates of pseudopotential here. Pseudopotential itself is
+        # calculated in "if derivative==0:", the dot product of field, see blakestad2010, Eq.(5.2).
+        # Other orders are derivatives for pseudopotential.  wwc
         p = [self.electrical_potential(x, "rf", i, expand=True)
                 for i in range(1, derivative+2)]
-        if derivative == 0:
+        if derivative == 0:    # pseudopotential itself.
             return np.einsum("ij,ij->i", p[0], p[0])  # Einstein summation  wwc
-        elif derivative == 1:
+        elif derivative == 1:    # "field" of pseudopotential. Two parts.  wwc
             return 2*np.einsum("ij,ijk->ik", p[0], p[1])
-        elif derivative == 2:    # 2nd should be a harmonic pseudo potential. Two parts.  wwc
+        elif derivative == 2:    # Two parts.  wwc
             return 2*(np.einsum("ijk,ijl->ikl", p[1], p[1])  # a2^2  wwc
                      +np.einsum("ij,ijkl->ikl", p[0], p[2]))  # a1*a3  wwc
         elif derivative == 3:
