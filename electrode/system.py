@@ -357,6 +357,77 @@ class System(list):
         for e, c in zip(self, itertools.cycle(colors.set3)):
             e.plot(ax, color=tuple(c/255.), alpha=alpha, **kwargs)
 
+    def plot_contour(self, ax, grid=None, slc='x', slc_at=0., fill=False,
+            divide_max=8, line_num=50, **kwargs):
+        """Contour plot total static and pseudo potential to either 
+        cross-section of x, y, z. Use max and min of potential as 
+        contour line regions ("levels" argument of plt.contour())
+
+        Parameters
+        ----------
+        ax : matplotlib axes
+        grid : Grid instance (see grid.py)
+            The center, step, shape parameters of grid has to be
+            the same as the grid when it's created for the calculation 
+            in bem. Values are store in vtk files, find a GridElectrode
+            instance e of either electrode. See below default grid.
+        slc : 'x', 'y', 'z'
+            The cross-section plane you want to slice.
+        slc_at : float
+            Slice cross-section at slc_at
+        fill : bool
+            Fill intervals (contourf) if True.
+        divide_max : float >= 1
+            Determine the upper limit of contour line region.
+        line_num : int
+            The number of contour lines to plot.
+        **kwargs : any
+            Passed all to plt.contour(), usually plot arguments.
+
+        Returns
+        -------
+        maxp, minp : max and min of potential in the plot region
+        """
+
+        # Create a Grid instance by default, using grid parameters from
+        # vtk of 1st GridElectrode (usually 'DC1') in system (self[0]). 
+        if grid == None:
+            from . import Grid
+            step, shape = self[0].spacing, self[0].data[0].shape[:-1]
+            # center is the midpoint of grid, so it's not self[0].origin.
+            center = self[0].origin + (np.array(shape)-1)*step/2
+            grid = Grid(center=center, step=step, shape=shape)
+
+        e3 = slc_at
+        sec = {'x':[1,2],'y':[0,2],'z':[0,1]}
+        coord = {'x':[2,0,1],'y':[0,2,1],'z':[0,1,2]}
+        xyz = grid.to_xyz()[sec[slc]]    # point arrays of the other two axes
+        pot = []
+        for e2 in xyz[1]:
+            pot.append([self.potential(x=np.array([e1,e2,e3])[coord[slc]],derivative=0)[0]
+                for e1 in xyz[0] ])
+        pot = np.array(pot)
+        maxp, minp = np.amax(pot),np.amin(pot)
+        print("max, min potential: %f, %f"%(maxp, minp))
+
+        axlb = {'x':'yz','y':'xz','z':'xy'}
+        maxcl, mincl = maxp/divide_max, minp
+        if maxcl <= mincl:
+            maxcl = (maxp-minp)/2 + minp
+            print("Have taken another levels upper limit. Use a smaller divide_max.")
+        kwargs.setdefault('levels',np.linspace(mincl, maxcl, line_num))
+        # kwargs.setdefault('cmap',plt.cm.Blues)
+        # vmin = maxcl/2 can have a better colormap contrast.
+        kwargs.setdefault('vmin',maxcl/2)
+        ax.set_xlabel(axlb[slc][0]+'/l',fontsize=15)
+        ax.set_ylabel(axlb[slc][1]+'/l',fontsize=15)
+        if fill == True:
+            fplot = ax.contourf
+        else:
+            fplot = ax.contour
+        CS = fplot(xyz[0], xyz[1], pot, **kwargs)    # CS for potential colorbar
+        return CS, (maxp, minp)
+
     def plot_voltages(self, ax, u=None, um=None, cmap=None,
             **kwargs):
         """Plot electrodes with color proportional to voltage.
