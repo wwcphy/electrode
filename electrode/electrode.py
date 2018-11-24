@@ -594,13 +594,16 @@ class GridElectrode(Electrode):
 
     def potential(self, x, derivative=0, potential=1., out=None):  # potential arg is the scaling factor.  wwc
         # Shift the grid points.  wwc
+        # 1.Even x could be list or tuple, it can be operated with ndarray, and final result is ndarray.
+        # 2.[None,:] have added a [] at axis=0, so x=[[x,y,z]], x.shape[0]=1.
         x = (x - self.origin[None, :])/self.spacing[None, :]    
-        if out is None:  # In System.electrical_potent ial, out=pot to receive data.  wwc
+        if out is None:  # In System.electrical_potential, out=pot to receive data.  wwc
+            # E.g. for field, out is [[0,0,0]]
             out = np.zeros((x.shape[0], 2*derivative+1), np.double)
         dat = self.data[derivative]
         # Summation of all dc potentials, +=  wwc
         for i in range(2*derivative+1):
-            # print("scaling", potential)    # wwc
+            # print("scaling", potential)    # "potential" is the voltage weight of unit potential.  wwc
             out[:, i] += potential*map_coordinates(dat[..., i], x.T,  # scaling of electrode potential values here!  wwc
-                    order=1, mode="nearest")    # ? Round arbitrary x coordinates to the grid points. May use interpolation in the future.  wwc
+                    order=1, mode="nearest")    # Linearly interpolate (order=1) x coordinates to the grid and find data.  wwc
         return out

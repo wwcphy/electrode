@@ -26,6 +26,7 @@ import logging
 
 import numpy as np
 from scipy import optimize, constants as ct
+import matplotlib.pyplot as plt
 
 if not hasattr(optimize, "minimize"):  # Check if scipy.optimize has attribute "minimize"
     # quick work around for scipy<0.11  # Perhaps this is an alternative method for old version scipy. wwc
@@ -369,6 +370,77 @@ class System(list):
         for e, c in zip(self, itertools.cycle(colors.set3)):
             e.plot(ax, color=tuple(c/255.), alpha=alpha, **kwargs)
 
+    def plot_contour(self, ax, grid=None, slc='x', slc_at=0., fill=False,
+            divide_max=8, line_num=50, **kwargs):
+        """Contour plot total static and pseudo potential to either 
+        cross-section of x, y, z. Use max and min of potential as 
+        contour line regions ("levels" argument of plt.contour())
+
+        Parameters
+        ----------
+        ax : matplotlib axes
+        grid : Grid instance (see grid.py)
+            The center, step, shape parameters of grid has to be
+            the same as the grid when it's created for the calculation 
+            in bem. Values are store in vtk files, find a GridElectrode
+            instance e of either electrode. See below default grid.
+        slc : 'x', 'y', 'z'
+            The cross-section plane you want to slice.
+        slc_at : float
+            Slice cross-section at slc_at
+        fill : bool
+            Fill intervals (contourf) if True.
+        divide_max : float >= 1
+            Determine the upper limit of contour line region.
+        line_num : int
+            The number of contour lines to plot.
+        **kwargs : any
+            Passed all to plt.contour(), usually plot arguments.
+
+        Returns
+        -------
+        maxp, minp : max and min of potential in the plot region
+        """
+
+        # Create a Grid instance by default, using grid parameters from
+        # vtk of 1st GridElectrode (usually 'DC1') in system (self[0]). 
+        if grid == None:
+            from . import Grid
+            step, shape = self[0].spacing, self[0].data[0].shape[:-1]
+            # center is the midpoint of grid, so it's not self[0].origin.
+            center = self[0].origin + (np.array(shape)-1)*step/2
+            grid = Grid(center=center, step=step, shape=shape)
+
+        e3 = slc_at
+        sec = {'x':[1,2],'y':[0,2],'z':[0,1]}
+        coord = {'x':[2,0,1],'y':[0,2,1],'z':[0,1,2]}
+        xyz = grid.to_xyz()[sec[slc]]    # point arrays of the other two axes
+        pot = []
+        for e2 in xyz[1]:
+            pot.append([self.potential(x=np.array([e1,e2,e3])[coord[slc]],derivative=0)[0]
+                for e1 in xyz[0] ])
+        pot = np.array(pot)
+        maxp, minp = np.amax(pot),np.amin(pot)
+        print("max, min potential: %f, %f"%(maxp, minp))
+
+        axlb = {'x':'yz','y':'xz','z':'xy'}
+        maxcl, mincl = maxp/divide_max, minp
+        if maxcl <= mincl:
+            maxcl = (maxp-minp)/2 + minp
+            print("Have taken another levels upper limit. Use a smaller divide_max.")
+        kwargs.setdefault('levels',np.linspace(mincl, maxcl, line_num))
+        # kwargs.setdefault('cmap',plt.cm.Blues)
+        # vmin = maxcl/2 can have a better colormap contrast.
+        kwargs.setdefault('vmin',maxcl/2)
+        ax.set_xlabel(axlb[slc][0]+'/l',fontsize=15)
+        ax.set_ylabel(axlb[slc][1]+'/l',fontsize=15)
+        if fill == True:
+            fplot = ax.contourf
+        else:
+            fplot = ax.contour
+        CS = fplot(xyz[0], xyz[1], pot, **kwargs)    # CS for potential colorbar
+        return CS, (maxp, minp)
+
     def plot_voltages(self, ax, u=None, um=None, cmap=None,
             **kwargs):
         """Plot electrodes with color proportional to voltage.
@@ -518,9 +590,9 @@ class System(list):
             ew, ev = ew[i], ev[:, i]
         return ew, ev
 
-    def trajectory(self, x0, v0, axis=(0, 1, 2),
-            t0=0, dt=.0063*2*np.pi, t1=1e4, nsteps=1,
-            integ="gni_irk2", *args, **kwargs):
+    def trajectory(self, x0, v0, qoverm, axis=(0, 1, 2),
+            t0=np.float64(0.), dt=np.float64(.0063*2*np.pi), t1=1e4, nsteps=1,
+            integ="RK45", *args, **kwargs):
         """Calculate an ion trajectory.
         
         Integrates the ion trajectory without the
@@ -533,6 +605,8 @@ class System(list):
             Initial position.
         v0 : array_like, shape (3,)
             Initial speed.
+        qoverm : float
+            Ratio q/m
         axis : tuple of int
             Axes to vary during the integration. If `x0` and `v0` lie in
             a symmetry plane, the perpendicular axis can be dropped.
@@ -551,23 +625,75 @@ class System(list):
         generator
             Yields `(t, x, v)` time, position ans speed data.
         """
-        if not callable(integ):
-            integ_ = getattr(gni, integ)
-            methc = kwargs.pop("methc", 2)
-            def integ(ddx, nsteps, t, p, q, t1, *args, **kwargs):
-                return integ_(ddx, nsteps, t, p, q, t1, methc,
-                        *args, **kwargs)
-        axis = list(axis)
-        t, p, q = t0, v0[axis], x0[axis]
-        x0 = np.array(x0)
-        def ddx(t, q, f):
-            x0[axis] = q
-            f[:] = self.time_potential(x0, 1, t, expand=True)[0, axis]
-        while t < t1:
-            integ(ddx, nsteps, t, p, q, t+dt, *args, **kwargs)
-            t += dt
-            yield t, q.copy(), p.copy()
+        # if not callable(integ):
+        #     integ_ = getattr(gni, integ)
+        #     methc = kwargs.pop("methc", 2)
+        #     def integ(ddx, nsteps, t, p, q, t1, *args, **kwargs):
+        #         return integ_(ddx, nsteps, t, p, q, t1, methc,
+        #                 *args, **kwargs)
+        # axis = list(axis)
+        # t, p, q = t0, v0[axis], x0[axis]
+        # x0 = np.array(x0)
+        # def ddx(t, q, f):
+        #     x0[axis] = q
+        #     f[:] = self.time_potential(x0, 1, t, expand=True)[0, axis]
+        # while t < t1:
+        #     integ(ddx, nsteps, t, p, q, t+dt, *args, **kwargs)
+        #     t += dt
+        #     yield t, q.copy(), p.copy()
 
+    # wwc version
+        from scipy.integrate import solve_ivp
+
+        axis, dim = list(axis), len(axis)    # dim = 3, haven't implemented axis of dim < 3.
+        # axis.extend([ax+dim for ax in axis])    # can't construct such axis for x+v because len(axis) could <3.
+        # axisv = [ax+dim for ax in axis]
+        ndt = np.float64(dt)*nsteps
+        t, x0, v0 = np.float64(t0), np.array(x0,dtype=np.float64)[axis], np.array(v0,dtype=np.float64)[axis]
+        yi = np.concatenate((x0,v0))
+        # print(yi)
+        kwargs.setdefault('t_eval',np.linspace(t,t+ndt,nsteps+1))
+        def ddx(t, y):
+            # y = np.array([x1,x2,x3,v1,v2,v3])[axis]
+            xp, vi = y[0:dim].copy(), y[dim:2*dim].copy()    # avoid changing y
+            xp[axis] = xp    # This looks like OK with dim<3, but time_potential() needs a 3D xp.
+            if "pseudo" in kwargs:
+                ai = -qoverm*self.potential(xp, derivative=1)[0, axis]
+            else:
+                ai = -qoverm*self.time_potential(xp, 1, t, expand=True)[0, axis]
+            # print("ai",ai)
+            return np.concatenate((vi,ai))
+        while t < t1:
+            # use result of last nstep as input
+            # print("t_eval",kwargs["t_eval"])
+            sol = solve_ivp(ddx, t_span=(t, t+ndt), y0=yi, method=integ, *args, **kwargs)
+            # print("t",sol.t,"y",sol.y)
+            t += ndt
+            kwargs['t_eval'] += ndt
+            yi = sol.y[:,-1]    # -1: y(t+ndt)
+            yield t, yi[0:dim].copy(), yi[dim:2*dim].copy()    # aviod changing yi, the ouput is along axis
+
+    # wwc toy version
+    def trajectory_toy(self, x0, v0, qoverm, axis=(0, 1, 2),
+            t0=np.float64(0.), dt=np.float64(1e-5), t1=1e4, nsteps=1,
+            integ="RK45", *args, **kwargs):
+
+        axis, dim = list(axis), len(axis)    # dim = 3, haven't implemented axis of dim < 3.
+        ndt = np.float64(dt)*nsteps
+        t, x0, v0 = np.float64(t0), np.array(x0,dtype=np.float64)[axis], np.array(v0,dtype=np.float64)[axis]
+        yi = np.concatenate((x0,v0))
+        def solve_toy(t_span, y0, *args, **kwargs):
+            dt = t_span[1]-t_span[0]
+            xp = y0[0:dim]
+            ai = -qoverm*self.time_potential(xp, 1, t_span[0], expand=True)[0, axis]
+            dx, dv = y0[dim:2*dim]*dt+1/2*ai*dt**2, ai*dt
+            return np.concatenate((dx,dv))
+        while t < t1:
+            sol_dy = solve_toy(t_span=(t, t+ndt), y0=yi, *args, **kwargs)
+            t += ndt
+            yi += sol_dy
+            yield t, yi[0:dim].copy(), yi[dim:2*dim].copy()    # aviod changing yi, the ouput is along axis
+        
     def shims(self, x_coord_deriv, objectives=[], constraints=None,
             **kwargs):
         """Determine shim vectors.
@@ -867,7 +993,7 @@ class System(list):
         yield " analyze point: %s" % (x,)    # x is 
         yield "               (%s µm)" % (x*l/1e-6,)
         # Based on the minimum found in advance in jupyter, there's another minimum.  wwc
-        trap = self.minimum(x)
+        trap = x#self.minimum(x)
         yield " minimum is at offset: %s" % (trap - x,)
         yield "                      (%s µm)" % ((trap - x)*l/1e-6,)
         # x is minimum point (just one point), so electrical_potential(x, "dc", 0) is like [[value]].  wwc
