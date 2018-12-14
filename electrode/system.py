@@ -218,7 +218,7 @@ class System(list):
             # getattr check if typ is an attribute of ei (GridElectrode instance), if it is, return the value of ei.typ  wwc
             # Typically, ei.typ is ei.dc or ei.rf, which are the scaling factor of each electrode potential.  wwc
             vi = getattr(ei, typ, None)
-            if vi:  # If set a ei.vi (ei.dc/ei.rf) = 0, you won't go into this if.  wwc
+            if vi:  # If set a ei.vi (ei.dc/ei.rf) = 0, or haven't set vi (None), you won't go into this if.  wwc
                 # ei can be any "electrode" classes in electrode.py, but we only use GridElectrode, # wwc
                 # so ei.potential refers to line ~595 in electrode.py.  wwc
                 ei.potential(x, derivative, potential=vi, out=pot)    # "potential" is the argument for ei.potential to scale.  wwc  Tried 100.
@@ -256,7 +256,7 @@ class System(list):
             ei.potential(x, derivative, potential=1., out=eff[i])
         return eff
 
-    def time_potential(self, x, derivative=0, t=0., expand=False):
+    def time_potential(self, x, derivative=0, t=0., phi=0., expand=False):
         """Electrical potential at an instant.
         
         No pseudopotential averaging. The phase of the rf voltage is
@@ -270,7 +270,7 @@ class System(list):
         derivative : int
             Derivative order
         t : float
-            Time instant
+            Time instant, usually pass into "/omega*t"
         expand : bool
             Expand to full tensorial form if True
 
@@ -281,7 +281,8 @@ class System(list):
         """
         dc, rf = (self.electrical_potential(x, typ, derivative, expand)
                 for typ in ("dc", "rf"))
-        return dc + np.cos(t)*rf
+        # print(dc + np.cos(t)*rf)
+        return dc + np.cos(t+phi)*rf
 
     def pseudo_potential(self, x, derivative=0):
         """The ponderomotive/pseudo potential.
@@ -299,13 +300,19 @@ class System(list):
             Pseudopotential derivative. Fully expanded since this is not
             generally harmonic.
         """
-        # RObert calculates derivates of pseudopotential here. Pseudopotential itself is
+        # Robert calculates derivates of pseudopotential here. Pseudopotential itself is
         # calculated in "if derivative==0:", the dot product of field, see blakestad2010, Eq.(5.2).
         # Other orders are derivatives for pseudopotential.  wwc
-        p = [self.electrical_potential(x, "rf", i, expand=True)
-                for i in range(1, derivative+2)]
+        try:
+            p = [self.rf_coeff*self.electrical_potential(x, "rf", i, expand=True)
+                for i in range(1, derivative+2)]    # pseudo derivative needs derivative+1 real potential  wwc
+        except AttributeError as err:
+            warnings.warn("\n\nHaven't set rf_coeff. Run <system>.rf_scale() first.\n")
+            raise err
+        # p = [self.electrical_potential(x, "rf", i, expand=True)
+        #         for i in range(1, derivative+2)]
         if derivative == 0:    # pseudopotential itself.
-            return np.einsum("ij,ij->i", p[0], p[0])  # Einstein summation  wwc
+            return np.einsum("ij,ij->i", p[0], p[0])  # Einstein summation. p[0] is real field  wwc
         elif derivative == 1:    # "field" of pseudopotential. Two parts.  wwc
             return 2*np.einsum("ij,ijk->ik", p[0], p[1])
         elif derivative == 2:    # Two parts.  wwc
@@ -334,7 +341,7 @@ class System(list):
             raise ValueError("only know how to generate pseudopotentials "
                 "up to 4th order")
 
-    def potential(self, x, derivative=0):
+    def potential(self, x, derivative=0, typ='tot'):
         """Combined electrical and ponderomotive potential.
         
         Parameters
@@ -353,7 +360,14 @@ class System(list):
         dc = self.electrical_potential(x, "dc", derivative,
                 expand=True)
         rf = self.pseudo_potential(x, derivative)
-        return dc + rf    # summation of rf with all dc.  wwc
+        if typ == 'tot':
+            return dc + rf    # summation of rf with all dc.  wwc
+        elif typ == 'dc':
+            return dc
+        elif typ == 'rf':
+            return rf
+        else:
+            raise ValueError("Valid typ: 'tot','dc','rf'.")
 
     def plot(self, ax, alpha=.3, **kwargs):
         """Plot electrodes projected onto the xy plane.
@@ -370,7 +384,7 @@ class System(list):
         for e, c in zip(self, itertools.cycle(colors.set3)):
             e.plot(ax, color=tuple(c/255.), alpha=alpha, **kwargs)
 
-    def plot_contour(self, ax, grid=None, slc='x', slc_at=0., fill=False,
+    def plot_contour(self, ax, grid=None, typ='tot', slc='x', slc_at=0., fill=False,
             divide_max=8, line_num=50, **kwargs):
         """Contour plot total static and pseudo potential to either 
         cross-section of x, y, z. Use max and min of potential as 
@@ -415,9 +429,10 @@ class System(list):
         sec = {'x':[1,2],'y':[0,2],'z':[0,1]}
         coord = {'x':[2,0,1],'y':[0,2,1],'z':[0,1,2]}
         xyz = grid.to_xyz()[sec[slc]]    # point arrays of the other two axes
+        axis = coord[slc]
         pot = []
         for e2 in xyz[1]:
-            pot.append([self.potential(x=np.array([e1,e2,e3])[coord[slc]],derivative=0)[0]
+            pot.append([self.potential(np.array([e1,e2,e3])[axis],0,typ)[0]
                 for e1 in xyz[0] ])
         pot = np.array(pot)
         maxp, minp = np.amax(pot),np.amin(pot)
@@ -590,9 +605,9 @@ class System(list):
             ew, ev = ew[i], ev[:, i]
         return ew, ev
 
-    def trajectory(self, x0, v0, qoverm, axis=(0, 1, 2),
-            t0=np.float64(0.), dt=np.float64(.0063*2*np.pi), t1=1e4, nsteps=1,
-            integ="RK45", *args, **kwargs):
+    def trajectory(self, x0, v0, qoverm, omega, axis=(0, 1, 2),
+            t0=np.double(0.), dt=np.double(.0063*2*np.pi), t1=1e4, nsteps=1,
+            phi=0., integ="RK45", *args, **kwargs):
         """Calculate an ion trajectory.
         
         Integrates the ion trajectory without the
@@ -648,8 +663,8 @@ class System(list):
         axis, dim = list(axis), len(axis)    # dim = 3, haven't implemented axis of dim < 3.
         # axis.extend([ax+dim for ax in axis])    # can't construct such axis for x+v because len(axis) could <3.
         # axisv = [ax+dim for ax in axis]
-        ndt = np.float64(dt)*nsteps
-        t, x0, v0 = np.float64(t0), np.array(x0,dtype=np.float64)[axis], np.array(v0,dtype=np.float64)[axis]
+        ndt = np.double(dt)*nsteps
+        t, x0, v0 = np.double(t0), np.array(x0,np.double)[axis], np.array(v0,np.double)[axis]
         yi = np.concatenate((x0,v0))
         # print(yi)
         kwargs.setdefault('t_eval',np.linspace(t,t+ndt,nsteps+1))
@@ -657,11 +672,10 @@ class System(list):
             # y = np.array([x1,x2,x3,v1,v2,v3])[axis]
             xp, vi = y[0:dim].copy(), y[dim:2*dim].copy()    # avoid changing y
             xp[axis] = xp    # This looks like OK with dim<3, but time_potential() needs a 3D xp.
-            if "pseudo" in kwargs:
+            if kwargs.get("pseudo",False):
                 ai = -qoverm*self.potential(xp, derivative=1)[0, axis]
             else:
-                ai = -qoverm*self.time_potential(xp, 1, t, expand=True)[0, axis]
-            # print("ai",ai)
+                ai = -qoverm*self.time_potential(xp, derivative=1, t=omega*t, phi=phi)[0, axis]
             return np.concatenate((vi,ai))
         while t < t1:
             # use result of last nstep as input
@@ -674,19 +688,32 @@ class System(list):
             yield t, yi[0:dim].copy(), yi[dim:2*dim].copy()    # aviod changing yi, the ouput is along axis
 
     # wwc toy version
-    def trajectory_toy(self, x0, v0, qoverm, axis=(0, 1, 2),
-            t0=np.float64(0.), dt=np.float64(1e-5), t1=1e4, nsteps=1,
-            integ="RK45", *args, **kwargs):
+    def trajectory_toy(self, x0, v0, qoverm, omega, axis=(0, 1, 2),
+            t0=np.double(0.), dt=np.double(1e-5), t1=1e4, nsteps=1,
+            phi=0., integ="RK45", itern=3, *args, **kwargs):
 
         axis, dim = list(axis), len(axis)    # dim = 3, haven't implemented axis of dim < 3.
-        ndt = np.float64(dt)*nsteps
-        t, x0, v0 = np.float64(t0), np.array(x0,dtype=np.float64)[axis], np.array(v0,dtype=np.float64)[axis]
+        ndt = np.double(dt)*nsteps
+        t, x0, v0 = np.double(t0), np.array(x0,np.double)[axis], np.array(v0,np.double)[axis]
         yi = np.concatenate((x0,v0))
         def solve_toy(t_span, y0, *args, **kwargs):
             dt = t_span[1]-t_span[0]
-            xp = y0[0:dim]
-            ai = -qoverm*self.time_potential(xp, 1, t_span[0], expand=True)[0, axis]
-            dx, dv = y0[dim:2*dim]*dt+1/2*ai*dt**2, ai*dt
+            xpi, vpi = y0[0:dim].copy(),y0[dim:2*dim].copy()
+            if kwargs.get("pseudo",False):
+                api = -qoverm*self.potential(xpi, derivative=1)[0, axis]
+                xp, vp, ap = xpi, vpi, api
+                for i in range(itern):
+                    dx, dv = np.double(vp*dt), np.double(ap*dt)    # +1/2*ap*dt**2
+                    xp, vp = (2*xpi+dx)/2, (2*vpi+dv)/2
+                    ap = (2*api-qoverm*self.potential(xp, derivative=1)[0, axis])/2
+            else:
+                api = -qoverm*self.time_potential(xpi, derivative=1, t=omega*t, phi=phi)[0, axis]
+                xp, vp, ap = xpi, vpi, api
+                for i in range(itern):
+                    dx, dv = np.double(vp*dt), np.double(ap*dt)    # +1/2*ap*dt**2
+                    print(dx, dv)
+                    xp, vp = (2*xpi+dx)/2, (2*vpi+dv)/2
+                    ap = (2*api-qoverm*self.time_potential(xpi, derivative=1, t=omega*(t+ndt), phi=phi)[0, axis])/2
             return np.concatenate((dx,dv))
         while t < t1:
             sol_dy = solve_toy(t_span=(t, t+ndt), y0=yi, *args, **kwargs)
@@ -977,7 +1004,8 @@ class System(list):
                 logger.log(log, line)
 
     def rf_scale(self, m, q, l, o):
-        return np.sqrt(q/m)/(2*l*o)    # This is the square root of pesudo potential coefficient (except amplitude Vrf).  wwc
+        self.rf_coeff = np.double(np.sqrt(q/m)/(2*l*o))
+        return self.rf_coeff    # This is the square root of pesudo potential coefficient (except amplitude Vrf).  wwc
 
     def _analyze_static(self, x, axis=(0, 1, 2),  # x is minimum
                         m=ct.atomic_mass, q=ct.elementary_charge,
