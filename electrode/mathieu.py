@@ -47,7 +47,7 @@ class Mathieu():
         """
         cosnu = np.cos(np.pi*np.sqrt(a)) \
             + np.pi*q**2/(4*np.sqrt(a)*(a-1))*np.sin(np.pi*np.sqrt(a)) \
-            + q**4*(np.pi**4/96-25*np.pi**2/256)
+            + q**4*(np.pi**4/96.-25*np.pi**2/256.)
         return np.arccos(cosnu)/np.pi
 
     def nu_exp_bla(self,a,q):
@@ -273,7 +273,7 @@ class Mathieu():
             raise ValueError("Invalid characteristic exponent mode.")
         if nc == None:
             nc = nu_n
-        self.Cn = self.coeff_Cn(nc,ng,a,q,self.nu)[0:2]
+        self.Cn = self.coeff_Cn(a,q,self.nu,nc,ng)[0:2]
         return 0
 
     def sol_y1(self,t,deri=0):
