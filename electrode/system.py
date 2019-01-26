@@ -289,8 +289,12 @@ class System(list):
             Pseudopotential derivative. Fully expanded since this is not
             generally harmonic.
         """
-        p = [self.electrical_potential(x, "rf", i, expand=True)
+        try:
+            p = [self.rf_coeff*self.electrical_potential(x, "rf", i, expand=True)
                 for i in range(1, derivative+2)]
+        except AttributeError as err:
+            warnings.warn("\n\nHaven't set rf_coeff. Run <System>.rf_scale() first.\n")
+            raise err
         if derivative == 0:
             return np.einsum("ij,ij->i", p[0], p[0])
         elif derivative == 1:
@@ -849,7 +853,7 @@ class System(list):
             is the spatial direction.
         """
         a = 16*scale**2*self.electrical_potential(x, "dc", 2, expand=True)[0]
-        q = 8*scale*self.electrical_potential(x, "rf", 2, expand=True)[0]
+        q = 8*scale**2*self.electrical_potential(x, "rf", 2, expand=True)[0]
         mu, b = mathieu(r, a, q)
         if sorted:
             i = mu.imag >= 0
@@ -867,12 +871,14 @@ class System(list):
         Use `atomic_mass` and `elementary_charge` from `scipy.constants`
         to set `m` and `q` correctly. All constants `m, q, l, o` are
         given in SI units.
+        
+        The voltage weights of pseudo-potential are scaled rf voltages.
+        Run `self.rf_scale()` before any calculation involving pseudo-
+        potential, so that both dc and rf voltages `self.dcs`, `self.rfs`
+        are SI volts::
 
-        The rf voltages, `self.rfs`, need to be set to rescaled
-        voltages, while the dc voltages `self.dcs` are SI volts::
-
-            alpha_rf = np.sqrt(q/m)/(2*l*o)
-            s.rfs = u_rf_in_volt*alpha_rf
+            rf_coeff = np.sqrt(q/m)/(2*l*o)
+            s.rfs = u_rf_in_volt
             s.dcs = u_dc_in_volt
 
         Parameters
@@ -888,7 +894,7 @@ class System(list):
         l : float
             Length scale (m).
         o : float
-            Rf frequency (rad/s).
+            Rf angular frequency (rad/s).
         ions : int
             Also analyze the modes of multiple ions.
         log : logging level
@@ -908,13 +914,34 @@ class System(list):
                 logger.log(log, line)
 
     def rf_scale(self, m, q, l, o):
-        return np.sqrt(q/m)/(2*l*o)
+        """Coefficient rf_coeff = \sqrt{\frac{q}{4m\Omega_{rf}^{2}}}.
+        Pseudo-potential \phi_{ps} = rf_coeff^{2}*V_{rf}^{2}(\nabla\phi_{rf})^{2}
+        Run this method before `pseudo_potential()` and `analyze_static()`.
+        
+        Parameters
+        ----------
+        m : float
+            Ion mass (kg).
+        q : float
+            Ion charge (C)
+        l : float
+            Length scale (m).
+        o : float
+            Rf angular frequency (rad/s).
+
+        Returns
+        -------
+        float
+            Coefficient np.sqrt(q/m)/(2*l*o)
+        """
+        self.rf_coeff = np.sqrt(q/m)/(2*l*o)
+        return self.rf_coeff
 
     def _analyze_static(self, x, axis=(0, 1, 2),
                         m=ct.atomic_mass, q=ct.elementary_charge,
                         l=100e-6, o=2*np.pi*1e6, ions=1, min_off=False):
         # rf pseudopotential voltage scale
-        rf_scale = self.rf_scale(m, q, l, o)
+        rf_scale = self.rf_coeff    # self.rf_scale(m, q, l, o)
         x = np.array(x)
         yield "parameters:"
         yield (" f=%.3g MHz, m=%.3g amu, q=%.3g qe,"
