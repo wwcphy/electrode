@@ -178,17 +178,17 @@ class System(list):
             if rfs is not None:
                 self.rfs = rfs
 
-    def electrical_potential(self, x, typ="dc", derivative=0, expand=False):
+    def electrical_potential(self, x, derivative=0, typ="dc", expand=False):
         """Electrical potential derivative.
 
         Parameters
         ----------
         x : array_like, shape (n, 3)
             Positions to evaluate the potential at.
-        typ : {"dc", "rf"}
-            Potential to scale the electrodes contribution with.
         derivative : int
             Derivative order.
+        typ : {"dc", "rf"}
+            Potential to scale the electrodes contribution with.
         expand : bool
             If True, return the fully expanded tensor, else return the
             reduced form.
@@ -260,7 +260,7 @@ class System(list):
         derivative : int
             Derivative order
         t : float
-            Time instant
+            Time instant, usually pass into \Omega_{rf}*t+\phi
         expand : bool
             Expand to full tensorial form if True
 
@@ -269,7 +269,7 @@ class System(list):
         array
             See `electrical_potential`.
         """
-        dc, rf = (self.electrical_potential(x, typ, derivative, expand)
+        dc, rf = (self.electrical_potential(x, derivative, typ, expand)
                 for typ in ("dc", "rf"))
         return dc + np.cos(t)*rf
 
@@ -290,10 +290,11 @@ class System(list):
             generally harmonic.
         """
         try:
-            p = [self.rf_coeff*self.electrical_potential(x, "rf", i, expand=True)
-                for i in range(1, derivative+2)]
+            p = [self.rf_coeff*self.electrical_potential(x, i, "rf", 
+                expand=True) for i in range(1, derivative+2)]
         except AttributeError as err:
-            warnings.warn("\n\nHaven't set rf_coeff. Run <System>.rf_scale() first.\n")
+            warnings.warn("\n\nHaven't set rf_coeff. "
+                "Run <System>.rf_scale() first.\n")
             raise err
         if derivative == 0:
             return np.einsum("ij,ij->i", p[0], p[0])
@@ -325,7 +326,7 @@ class System(list):
             raise ValueError("only know how to generate pseudopotentials "
                 "up to 4th order")
 
-    def potential(self, x, derivative=0):
+    def potential(self, x, derivative=0, typ='tot'):
         """Combined electrical and ponderomotive potential.
         
         Parameters
@@ -334,6 +335,8 @@ class System(list):
             Points to evaluate at.
         derivative : int <= 4
             Derivative order. Implemented up to 4th order.
+        typ : "tot", "dc", "rf"
+            Total, total dc, total rf pseudo potential.
 
         Returns
         -------
@@ -341,10 +344,17 @@ class System(list):
             Pseudopotential derivative. Fully expanded since this is not
             generally harmonic.
         """
-        dc = self.electrical_potential(x, "dc", derivative,
+        dc = self.electrical_potential(x, derivative, "dc",
                 expand=True)
         rf = self.pseudo_potential(x, derivative)
-        return dc + rf
+        if typ == 'tot':
+            return dc + rf
+        elif typ == 'dc':
+            return dc
+        elif typ == 'rf':
+            return rf
+        else:
+            raise ValueError("Valid typ: 'tot','dc','rf'")
 
     def plot(self, ax, alpha=.3, **kwargs):
         """Plot electrodes projected onto the xy plane.
@@ -361,20 +371,25 @@ class System(list):
         for e, c in zip(self, itertools.cycle(colors.set3)):
             e.plot(ax, color=tuple(c/255.), alpha=alpha, **kwargs)
 
-    def plot_contour(self, ax, grid=None, slc='x', slc_at=0., fill=False,
-            divide_max=8, line_num=50, **kwargs):
-        """Contour plot total static and pseudo potential to either 
-        cross-section of x, y, z. Use max and min of potential as 
-        contour line regions ("levels" argument of plt.contour())
+    def plot_contour(self, ax, grid=None, typ='tot', slc='x', slc_at=0.,
+            fill=False, divide_max=8, line_num=50, **kwargs):
+        """Contour plot of potentials onto 2D slice.
+
+        Plot total/dc/pseudo potential contour to either cross-section 
+        of x, y, z. Use min and scaled max of potential as contour 
+        value range ("levels" argument of plt.contour()). Will print
+        min and max for reference.
 
         Parameters
         ----------
-        ax : matplotlib axes
+        ax : matplotlib.axes.Axes instance
         grid : Grid instance (see grid.py)
-            The center, step, shape parameters of grid has to be
-            the same as the grid when it's created for the calculation 
-            in bem. Values are store in vtk files, find a GridElectrode
-            instance e of either electrode. See below default grid.
+            The center, step, shape arguments of grid can be the same 
+            as those in grid created for calculation in bem. Values are 
+            stored in vtk header, and can be found in either GridElectrode
+            instance. See below default grid.
+        typ : "tot", "dc", "rf"
+            Total, total dc, total rf pseudo potential.
         slc : 'x', 'y', 'z'
             The cross-section plane you want to slice.
         slc_at : float
@@ -383,6 +398,8 @@ class System(list):
             Fill intervals (contourf) if True.
         divide_max : float >= 1
             Determine the upper limit of contour line region.
+            Choose divide_max smaller than but close to max potential, 
+            or try divide_max=-1 first.
         line_num : int
             The number of contour lines to plot.
         **kwargs : any
@@ -390,46 +407,52 @@ class System(list):
 
         Returns
         -------
-        maxp, minp : max and min of potential in the plot region
+        CS : matplotlib.contour.QuadContourSet instance
+            Return a ContourSet for potential colorbars.
+        (maxp, minp) : (float, float)
+            max and min of potential in the plot region.
         """
 
         # Create a Grid instance by default, using grid parameters from
         # vtk of 1st GridElectrode (usually 'DC1') in system (self[0]). 
         if grid == None:
             from . import Grid
-            step, shape = self[0].spacing, self[0].data[0].shape[:-1]
+            step, shape = self[0].spacing, np.array(self[0].data[0].shape[:-1])
             # center is the midpoint of grid, so it's not self[0].origin.
-            center = self[0].origin + (np.array(shape)-1)*step/2
+            center = self[0].origin + (shape-1)*step/2
             grid = Grid(center=center, step=step, shape=shape)
 
         e3 = slc_at
         sec = {'x':[1,2],'y':[0,2],'z':[0,1]}
         coord = {'x':[2,0,1],'y':[0,2,1],'z':[0,1,2]}
         xyz = grid.to_xyz()[sec[slc]]    # point arrays of the other two axes
+        axis = coord[slc]
         pot = []
         for e2 in xyz[1]:
-            pot.append([self.potential(x=np.array([e1,e2,e3])[coord[slc]],derivative=0)[0]
+            pot.append([self.potential(np.array([e1,e2,e3])[axis], 0, typ)[0]
                 for e1 in xyz[0] ])
         pot = np.array(pot)
         maxp, minp = np.amax(pot),np.amin(pot)
         print("max, min potential: %f, %f"%(maxp, minp))
 
         axlb = {'x':'yz','y':'xz','z':'xy'}
+        # scale max potential with divide_max
         maxcl, mincl = maxp/divide_max, minp
         if maxcl <= mincl:
             maxcl = (maxp-minp)/2 + minp
-            print("Have taken another levels upper limit. Use a smaller divide_max.")
+            warnings.warn("\n\nHave taken another levels upper limit. "
+                "Use a smaller divide_max.\n")
         kwargs.setdefault('levels',np.linspace(mincl, maxcl, line_num))
         # kwargs.setdefault('cmap',plt.cm.Blues)
         # vmin = maxcl/2 can have a better colormap contrast.
         kwargs.setdefault('vmin',maxcl/2)
-        ax.set_xlabel(axlb[slc][0]+'/l',fontsize=15)
-        ax.set_ylabel(axlb[slc][1]+'/l',fontsize=15)
+        ax.set_xlabel(axlb[slc][0]+'/l',fontsize=12)
+        ax.set_ylabel(axlb[slc][1]+'/l',fontsize=12)
         if fill == True:
             fplot = ax.contourf
         else:
             fplot = ax.contour
-        CS = fplot(xyz[0], xyz[1], pot, **kwargs)    # CS for potential colorbar
+        CS = fplot(xyz[0], xyz[1], pot, **kwargs)    # for potential colorbar
         return CS, (maxp, minp)
 
     def plot_voltages(self, ax, u=None, um=None, cmap=None,
@@ -852,8 +875,8 @@ class System(list):
             the rf frequency multiple (from `-r` to `r`) and the second
             is the spatial direction.
         """
-        a = 16*scale**2*self.electrical_potential(x, "dc", 2, expand=True)[0]
-        q = 8*scale**2*self.electrical_potential(x, "rf", 2, expand=True)[0]
+        a = 16*scale**2*self.electrical_potential(x, 2, "dc", expand=True)[0]
+        q = 8*scale**2*self.electrical_potential(x, 2, "rf", expand=True)[0]
         mu, b = mathieu(r, a, q)
         if sorted:
             i = mu.imag >= 0
@@ -957,7 +980,7 @@ class System(list):
             trap = self.minimum(x)
         yield " minimum is at offset: %s" % (trap - x,)
         yield "                      (%s µm)" % ((trap - x)*l/1e-6,)
-        p_dc = self.electrical_potential(x, "dc", 0)[0]
+        p_dc = self.electrical_potential(x, 0, "dc")[0]
         p_rf = self.pseudo_potential(x, 0)[0]
         yield "potential:"
         yield " dc electrical: %.2g eV" % p_dc
@@ -970,7 +993,7 @@ class System(list):
         except:
             yield " saddle not found"
         yield "force:"
-        f_dc = self.electrical_potential(x, "dc", 1)[0]
+        f_dc = self.electrical_potential(x, 1, "dc")[0]
         f_rf = self.pseudo_potential(x, 1)[0]
         yield " dc electrical: %s eV/l" % (f_dc,)
         yield "               (%s eV/m)" % (f_dc/l,)
