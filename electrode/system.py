@@ -887,7 +887,7 @@ class System(list):
 
     def analyze_static(self, x, axis=(0, 1, 2),
             m=ct.atomic_mass, q=ct.elementary_charge,
-            l=100e-6, o=2*np.pi*1e6, ions=1, log=None, *args, **kwargs):
+            l=100e-6, o=2*np.pi*1e6, ions=1, log=None, **kwargs):
         """Perform an textual analysis of the potential at and around
         a point.
 
@@ -928,8 +928,19 @@ class System(list):
         -------
         generator
             Yields strings that can be printed or written to a file.
+        **kwargs :
+            All passed to _analyze_static(), see its arguments.
+            min_off : bool
+                Don't search minimum if True.
+            min_offset : array_like, shape (3,)
+                Intentionally introduce an offset to search minimum.
+            min_method : str
+                Method for minimization. See `scipy.opimize.minimize()` for
+                possible values.
+            saddle_offset : array_like, shape (3,)
+                Intentionally introduce an offset to search saddle point.
         """
-        it = self._analyze_static(x, axis, m, q, l, o, ions, *args, **kwargs)
+        it = self._analyze_static(x, axis, m, q, l, o, ions, **kwargs)
         if log is None:
             return it
         else:
@@ -962,7 +973,10 @@ class System(list):
 
     def _analyze_static(self, x, axis=(0, 1, 2),
                         m=ct.atomic_mass, q=ct.elementary_charge,
-                        l=100e-6, o=2*np.pi*1e6, ions=1, min_off=False):
+                        l=100e-6, o=2*np.pi*1e6, ions=1,
+                        min_off=False, min_offset=np.array([0., 0., 0.]),
+                        min_method='Nelder-Mead',
+                        saddle_offset=np.array([0., 0., 0.])):
         # rf pseudopotential voltage scale
         rf_scale = self.rf_coeff    # self.rf_scale(m, q, l, o)
         x = np.array(x)
@@ -974,10 +988,12 @@ class System(list):
         yield "corrdinates:"
         yield " analyze point: %s" % (x,)
         yield "               (%s µm)" % (x*l/1e-6,)
+        # two successive minimum() may cause precision loss error
         if min_off:
             trap = x
         else:
-            trap = self.minimum(x)
+            # 'Nelder-Mead'/'Powell' don't use jac and hess, can avoid precision loss
+            trap = self.minimum(x+min_offset, method=min_method)
         yield " minimum is at offset: %s" % (trap - x,)
         yield "                      (%s µm)" % ((trap - x)*l/1e-6,)
         p_dc = self.electrical_potential(x, 0, "dc")[0]
@@ -986,7 +1002,7 @@ class System(list):
         yield " dc electrical: %.2g eV" % p_dc
         yield " rf pseudo: %.2g eV" % p_rf
         try:
-            xs, xsp = self.saddle(x + 1e-2*x[2])
+            xs, xsp = self.saddle(x + saddle_offset)    # 1e-2*x[2]
             yield " saddle offset: %s" % (xs - x,)
             yield "               (%s µm)" % ((xs - x)*l/1e-6,)
             yield " saddle height: %.2g eV" % (xsp - (p_dc + p_rf))
